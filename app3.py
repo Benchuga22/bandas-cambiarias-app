@@ -14,7 +14,6 @@ API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
 API_KEY = "REMOVIDO"   # 👈 reemplazá con tu API Key
 HEADERS = {"x-api-key": API_KEY}
 
-
 # -------------------------------
 # FUNCIONES
 # -------------------------------
@@ -23,7 +22,17 @@ def traer_precio_api():
     """Trae el último precio del dólar mayorista desde la API del MAE"""
     try:
         response = requests.get(API_URL, headers=HEADERS, timeout=10)
-        data = response.json()
+
+        if response.status_code != 200:
+            st.warning(f"API devolvió status {response.status_code}: {response.text[:200]}")
+            return None
+
+        # Intentamos parsear JSON
+        try:
+            data = response.json()
+        except Exception:
+            st.warning(f"Respuesta no es JSON válido: {response.text[:200]}")
+            return None
 
         # Caso 1: si viene como string con JSON adentro
         if isinstance(data, str):
@@ -45,6 +54,7 @@ def traer_precio_api():
             None
         )
         return usd_mayorista
+
     except Exception as e:
         st.error(f"Error al consultar API: {e}")
         return None
@@ -149,5 +159,4 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
 
