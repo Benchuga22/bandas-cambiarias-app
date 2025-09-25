@@ -52,26 +52,27 @@ def traer_precio_api():
 
 def actualizar_historico(usd_mayorista):
     """Guarda el valor spot en el histórico asegurando fechas limpias"""
-    ahora = datetime.now()
+    ahora = datetime.now().replace(second=0, microsecond=0)  # ⏱️ redondeamos a minuto exacto
 
-    # Nueva fila con valor de la API
     nuevo = pd.DataFrame([{
-        "fecha": ahora.strftime("%Y-%m-%d %H:%M:%S"),  # formato ISO siempre
+        "fecha": ahora.strftime("%Y-%m-%d %H:%M:%S"),
         "precio": usd_mayorista
     }])
 
-    # Cargar histórico existente o iniciar
     if os.path.exists(ARCHIVO_HISTORICO):
         historico = pd.read_csv(ARCHIVO_HISTORICO)
         historico = pd.concat([historico, nuevo], ignore_index=True)
     else:
         historico = nuevo
 
-    # Convertir fechas a datetime y limpiar duplicados
+    # Aseguramos formato de fecha
     historico["fecha"] = pd.to_datetime(
-        historico["fecha"], errors="coerce", format="%Y-%m-%d %H:%M:%S"
+        historico["fecha"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
     )
-    historico = historico.sort_values("fecha").drop_duplicates(subset=["fecha"], keep="last")
+
+    # Ordenar por fecha y eliminar duplicados por minuto
+    historico = historico.sort_values("fecha")
+    historico = historico.drop_duplicates(subset=["fecha"], keep="last")
 
     # Guardar limpio
     historico.to_csv(ARCHIVO_HISTORICO, index=False)
