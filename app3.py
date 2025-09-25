@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 # -------------------------------
 ARCHIVO_HISTORICO = "historico_mayorista.csv"
 API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
-API_KEY = "nuDX73vj2483KSUgvenkj9t50oA0vgvA4WcuRAER"   # 👈 reemplazá con tu API Key
+API_KEY = st.secrets["API_KEY"]  # 👈 reemplazá con tu API Key
 HEADERS = {"x-api-key": API_KEY}
 
 # -------------------------------
