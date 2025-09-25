@@ -1,4 +1,3 @@
-
 import os
 import json
 import requests
@@ -19,6 +18,7 @@ HEADERS = {"x-api-key": API_KEY}
 # -------------------------------
 # FUNCIONES
 # -------------------------------
+@st.cache_data(ttl=300)  # cachea el resultado por 5 minutos
 def traer_precio_api():
     """Trae el último precio del dólar mayorista desde la API del MAE"""
     try:
@@ -90,7 +90,7 @@ st.title("📊 Dólar Mayorista vs Bandas Cambiarias")
 bandas = pd.read_csv("bandas.csv")
 bandas["fecha"] = pd.to_datetime(bandas["fecha"], dayfirst=True, errors="coerce")
 
-# --- Traer valor actual desde API ---
+# --- Traer valor actual desde API (cacheado 5 min) ---
 usd_mayorista = traer_precio_api()
 
 # --- Actualizar histórico ---
@@ -148,4 +148,5 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
 
