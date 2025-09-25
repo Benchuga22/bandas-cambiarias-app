@@ -11,8 +11,11 @@ import plotly.graph_objects as go
 # -------------------------------
 ARCHIVO_HISTORICO = "historico_mayorista.csv"
 API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
-API_KEY = st.secrets["API_KEY"]  # 👈 reemplazá con tu API Key
+
+# Leemos la API Key desde los secrets de Streamlit
+API_KEY = st.secrets["API_KEY"]
 HEADERS = {"x-api-key": API_KEY}
+
 
 # -------------------------------
 # FUNCIONES
@@ -24,14 +27,16 @@ def traer_precio_api():
         response = requests.get(API_URL, headers=HEADERS, timeout=10)
 
         if response.status_code != 200:
-            st.warning(f"API devolvió status {response.status_code}: {response.text[:200]}")
+            st.warning(f"API devolvió status {response.status_code}")
+            st.text_area("Respuesta API", response.text[:500], height=150)
             return None
 
         # Intentamos parsear JSON
         try:
             data = response.json()
         except Exception:
-            st.warning(f"Respuesta no es JSON válido: {response.text[:200]}")
+            st.warning("Respuesta no es JSON válido")
+            st.text_area("Respuesta API (texto crudo)", response.text[:500], height=150)
             return None
 
         # Caso 1: si viene como string con JSON adentro
@@ -159,4 +164,3 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
