@@ -4,6 +4,8 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+import streamlit as st
+
 
 # --- Archivos ---
 archivo_historico = "historico_mayorista.csv"
@@ -66,7 +68,13 @@ else:
     else:
         historico = pd.DataFrame(columns=["fecha", "precio"])
 
-historico["fecha"] = pd.to_datetime(historico["fecha"], errors="coerce")
+#historico["fecha"] = pd.to_datetime(historico["fecha"], errors="coerce")
+historico["fecha"] = pd.to_datetime(
+    historico["fecha"], 
+    format="mixed",     # deja que Pandas detecte múltiples formatos
+    errors="coerce"     # ignora si alguna no entra
+)
+
 
 # --- Gráfico ---
 fig = go.Figure()
@@ -116,3 +124,6 @@ if usd_mayorista:
     )
 
 fig.show()
+
+st.plotly_chart(fig, use_container_width=True)
+
