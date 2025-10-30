@@ -144,6 +144,19 @@ except Exception as e:
 # Traer valor actual desde API (cacheado 5 min)
 usd_mayorista = traer_precio_api()
 
+if usd_mayorista is None and not historico.empty:
+    ultimo_hist = historico.sort_values("fecha").iloc[-1]["precio"]
+    st.info("No se pudo leer el spot en tiempo real; usando el último valor del histórico.")
+    # Si igual querés marcar un punto 'actual' con el último histórico:
+    ahora = datetime.now().replace(second=0, microsecond=0)
+    fila_aprox = pd.DataFrame([{"fecha": ahora, "precio": float(ultimo_hist)}])
+    historico = (
+        pd.concat([historico, fila_aprox], ignore_index=True)
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .sort_values("fecha")
+        .reset_index(drop=True)
+    )
+
 # Cargar histórico desde el único Excel y, si hay API, anexar spot en memoria
 try:
     historico = cargar_historico_desde_xlsx(".")
