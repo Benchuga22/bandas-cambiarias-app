@@ -12,55 +12,39 @@ import plotly.graph_objects as go
 # CONFIG
 # -------------------------------
 API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
-
-# API key: primero busca en secrets de Streamlit, si no en variable de entorno
 API_KEY = st.secrets.get("API_KEY", os.getenv("MAE_API_KEY"))
 HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
 
 # -------------------------------
 # FUNCIONES
 # -------------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300)  # cachea 5 minutos
 def traer_precio_api():
-    """Trae el último precio del dólar mayorista desde la API del MAE.
-       Detecta bloqueos de Incapsula y evita romper el app."""
+    """
+    Trae el último precio del dólar mayorista desde la API del MAE.
+    Si la respuesta no es JSON (p.ej. HTML de Incapsula), devuelve None.
+    """
     if not API_KEY:
-        st.warning("Falta API_KEY (secrets['API_KEY'] o MAE_API_KEY).")
         return None
 
-    # Headers más 'humanos' para evitar heurísticas de bot
-    headers = {
-        "x-api-key": API_KEY,
-        "Accept": "application/json, text/plain, */*",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Origin": "https://www.mae.com.ar",
-        "Referer": "https://www.mae.com.ar/",
-        "Connection": "keep-alive",
-    }
-
     try:
-        resp = requests.get(API_URL, headers=headers, timeout=10, allow_redirects=False)
+        resp = requests.get(API_URL, headers=HEADERS, timeout=10)
 
-        # Si no es 200, lo mostramos y salimos
+        # 1) Si no es 200, no seguimos
         if resp.status_code != 200:
-            st.warning(f"API devolvió status {resp.status_code}")
-            st.text_area("Respuesta API", resp.text[:1000], height=150)
             return None
 
-        # Si el content-type no es JSON o contiene HTML, probablemente es Incapsula
+        # 2) Si parece HTML (bloqueo Incapsula), no seguimos
         ctype = resp.headers.get("Content-Type", "")
         if "json" not in ctype.lower() or "<html" in resp.text.lower():
-            st.warning("La respuesta no parece JSON (posible bloqueo de Incapsula).")
-            st.text_area("Respuesta API", resp.text[:1000], height=150)
             return None
 
+        # 3) Parseo JSON
         data = resp.json()
         if isinstance(data, str):
             data = json.loads(data)
 
+        # Normalizar estructura
         if isinstance(data, dict) and "data" in data:
             cotizaciones = data["data"]
         elif isinstance(data, list):
@@ -68,6 +52,7 @@ def traer_precio_api():
         else:
             cotizaciones = []
 
+        # Buscar ticker mayorista
         usd_mayorista = next(
             (item.get("precioUltimo")
              for item in cotizaciones
@@ -78,17 +63,15 @@ def traer_precio_api():
         )
         return usd_mayorista
 
-    except Exception as e:
-        st.error(f"Error al consultar API: {e}")
+    except Exception:
         return None
-
 
 
 def cargar_historico_desde_xlsx(carpeta="."):
     """
-    Carga histórico desde el primer .xlsx/.xls encontrado en 'carpeta'.
-    Normaliza columnas (Fecha, Volumen, Precio) y devuelve solo ['fecha','precio'].
-    Filtra a fechas con año >= 2025.
+    Carga histórico desde el primer .xlsx/.xls en 'carpeta'.
+    Espera columnas: Fecha, Volumen, Precio (no todas se usan).
+    Devuelve DataFrame con ['fecha','precio'] filtrado a año >= 2025.
     """
     xls = [p for p in Path(carpeta).glob("*.xls*") if not p.name.startswith("~$")]
     if not xls:
@@ -98,8 +81,9 @@ def cargar_historico_desde_xlsx(carpeta="."):
 
     df = pd.read_excel(xls[0], engine="openpyxl")
 
-    # Normalizar nombres de columnas
+    # Normalizar columnas
     df.columns = [c.strip().lower() for c in df.columns]
+    # Renombrar si vienen variantes
     ren = {}
     if "fecha" not in df.columns:
         for c in df.columns:
@@ -115,14 +99,14 @@ def cargar_historico_desde_xlsx(carpeta="."):
     if "fecha" not in df.columns or "precio" not in df.columns:
         raise ValueError("El Excel debe contener columnas 'Fecha' y 'Precio'.")
 
-    # Parseo robusto de fecha (prioriza día/mes/año, tolera mezclas)
+    # Parseo fechas d/m/Y con tolerancia a mezclas
     df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True, errors="coerce")
     df = df.dropna(subset=["fecha"])
 
-    # Filtrar a año >= 2025
+    # Filtro a 2025+
     df = df[df["fecha"].dt.year >= 2025]
 
-    # Quedarse solo con lo necesario
+    # Sólo lo necesario
     df = df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
     return df
 
@@ -141,35 +125,48 @@ def cargar_bandas_desde_csv(path="bandas.csv"):
     bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
     return bandas
 
-
 # -------------------------------
 # APP STREAMLIT
 # -------------------------------
 st.set_page_config(page_title="Bandas Cambiarias", layout="wide")
 st.title("Dólar Mayorista vs Bandas Cambiarias")
 
-# Cargar bandas
+# Bandas
 try:
     bandas = cargar_bandas_desde_csv("bandas.csv")
 except Exception as e:
     st.error(f"No se pudieron cargar las bandas: {e}")
     st.stop()
 
-# Traer valor actual desde API (cacheado 5 min)
-usd_mayorista = traer_precio_api()
-
-
-
-# Cargar histórico desde el único Excel y, si hay API, anexar spot en memoria
+# Histórico desde Excel
 try:
     historico = cargar_historico_desde_xlsx(".")
 except Exception as e:
     st.error(f"No se pudo cargar el histórico desde Excel: {e}")
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
+# Intento de spot por API
+usd_mayorista = traer_precio_api()
 ahora = datetime.now().replace(second=0, microsecond=0)
 
-if usd_mayorista is not None:
+# Fallback (B): si la API falla, usar último valor del histórico
+if usd_mayorista is None:
+    if not historico.empty:
+        ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
+        st.info("No se pudo leer el spot en tiempo real; se usa el último valor del histórico.")
+        # Anexamos un punto 'actual' con el último histórico (en memoria)
+        fila_aprox = pd.DataFrame([{"fecha": ahora, "precio": ultimo_hist}])
+        historico = (
+            pd.concat([historico, fila_aprox], ignore_index=True)
+            .drop_duplicates(subset=["fecha"], keep="last")
+            .sort_values("fecha")
+            .reset_index(drop=True)
+        )
+    else:
+        st.warning("No hay histórico disponible y la API falló. No se puede mostrar el spot actual.")
+
+# Si la API funcionó, anexar punto real en memoria (sin tocar el Excel)
+else:
     fila_actual = pd.DataFrame([{"fecha": ahora, "precio": usd_mayorista}])
     historico = (
         pd.concat([historico, fila_actual], ignore_index=True)
@@ -177,8 +174,6 @@ if usd_mayorista is not None:
         .sort_values("fecha")
         .reset_index(drop=True)
     )
-else:
-    st.warning("No se pudo obtener el valor del dólar mayorista en tiempo real; se grafica solo el histórico del Excel.")
 
 # -------------------------------
 # GRÁFICO
@@ -212,14 +207,15 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto spot actual
-if usd_mayorista is not None:
+# Punto “actual” (sea real por API o aproximación del histórico)
+if not historico.empty:
+    punto_actual = historico.iloc[-1]
     fig.add_trace(go.Scatter(
-        x=[ahora], y=[usd_mayorista],
+        x=[punto_actual["fecha"]], y=[punto_actual["precio"]],
         mode="markers+text",
         name="USD Actual",
         marker=dict(size=8),
-        text=[f"${usd_mayorista}"],
+        text=[f"${punto_actual['precio']:.2f}"],
         textposition="top right"
     ))
 
