@@ -11,58 +11,29 @@ import plotly.graph_objects as go
 # -------------------------------
 # CONFIG
 # -------------------------------
-API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
-API_KEY = st.secrets.get("API_KEY", os.getenv("MAE_API_KEY"))
-HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
+# URL de tu proxy FastAPI (poner en Streamlit Secrets o variable de entorno)
+PROXY_URL = st.secrets.get("PROXY_URL", os.getenv("PROXY_URL"))
 
 # -------------------------------
 # FUNCIONES
 # -------------------------------
-@st.cache_data(ttl=300)  # cachea 5 minutos
-def traer_precio_api():
+@st.cache_data(ttl=300)
+def traer_precio_api_via_proxy():
     """
-    Trae el último precio del dólar mayorista desde la API del MAE.
-    Si la respuesta no es JSON (p.ej. HTML de Incapsula), devuelve None.
+    Llama al proxy (FastAPI) que consulta el MAE y devuelve {precio: ...}.
+    Devuelve None si falla.
     """
-    if not API_KEY:
+    if not PROXY_URL:
         return None
-
     try:
-        resp = requests.get(API_URL, headers=HEADERS, timeout=10)
-
-        # 1) Si no es 200, no seguimos
-        if resp.status_code != 200:
+        r = requests.get(f"{PROXY_URL.rstrip('/')}/mae/latest", timeout=10)
+        if r.status_code != 200:
             return None
-
-        # 2) Si parece HTML (bloqueo Incapsula), no seguimos
-        ctype = resp.headers.get("Content-Type", "")
-        if "json" not in ctype.lower() or "<html" in resp.text.lower():
-            return None
-
-        # 3) Parseo JSON
-        data = resp.json()
+        data = r.json()
+        # Por si el proxy alguna vez respondiera string JSON
         if isinstance(data, str):
             data = json.loads(data)
-
-        # Normalizar estructura
-        if isinstance(data, dict) and "data" in data:
-            cotizaciones = data["data"]
-        elif isinstance(data, list):
-            cotizaciones = data
-        else:
-            cotizaciones = []
-
-        # Buscar ticker mayorista
-        usd_mayorista = next(
-            (item.get("precioUltimo")
-             for item in cotizaciones
-             if isinstance(item, dict)
-             and item.get("ticker") == "UST$T"
-             and item.get("plazo") == "000"),
-            None
-        )
-        return usd_mayorista
-
+        return data.get("precio")
     except Exception:
         return None
 
@@ -79,11 +50,11 @@ def cargar_historico_desde_xlsx(carpeta="."):
     if len(xls) > 1:
         st.warning(f"Se encontraron varios Excel, se usará: {xls[0].name}")
 
+    # requiere openpyxl en requirements.txt
     df = pd.read_excel(xls[0], engine="openpyxl")
 
     # Normalizar columnas
     df.columns = [c.strip().lower() for c in df.columns]
-    # Renombrar si vienen variantes
     ren = {}
     if "fecha" not in df.columns:
         for c in df.columns:
@@ -125,36 +96,36 @@ def cargar_bandas_desde_csv(path="bandas.csv"):
     bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
     return bandas
 
+
 # -------------------------------
 # APP STREAMLIT
 # -------------------------------
 st.set_page_config(page_title="Bandas Cambiarias", layout="wide")
 st.title("Dólar Mayorista vs Bandas Cambiarias")
 
-# Bandas
+# Cargar bandas
 try:
     bandas = cargar_bandas_desde_csv("bandas.csv")
 except Exception as e:
     st.error(f"No se pudieron cargar las bandas: {e}")
     st.stop()
 
-# Histórico desde Excel
+# Cargar histórico desde el único Excel
 try:
     historico = cargar_historico_desde_xlsx(".")
 except Exception as e:
     st.error(f"No se pudo cargar el histórico desde Excel: {e}")
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
-# Intento de spot por API
-usd_mayorista = traer_precio_api()
+# Traer spot via proxy
+usd_mayorista = traer_precio_api_via_proxy()
 ahora = datetime.now().replace(second=0, microsecond=0)
 
-# Fallback (B): si la API falla, usar último valor del histórico
+# Fallback: si el proxy falla, usar último valor del histórico como punto “actual”
 if usd_mayorista is None:
     if not historico.empty:
         ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
-        st.info("No se pudo leer el spot en tiempo real; se usa el último valor del histórico.")
-        # Anexamos un punto 'actual' con el último histórico (en memoria)
+        st.info("No se pudo leer el spot en tiempo real (proxy/API). Se usa el último valor del histórico.")
         fila_aprox = pd.DataFrame([{"fecha": ahora, "precio": ultimo_hist}])
         historico = (
             pd.concat([historico, fila_aprox], ignore_index=True)
@@ -162,12 +133,9 @@ if usd_mayorista is None:
             .sort_values("fecha")
             .reset_index(drop=True)
         )
-    else:
-        st.warning("No hay histórico disponible y la API falló. No se puede mostrar el spot actual.")
-
-# Si la API funcionó, anexar punto real en memoria (sin tocar el Excel)
 else:
-    fila_actual = pd.DataFrame([{"fecha": ahora, "precio": usd_mayorista}])
+    # Si el proxy devuelve precio, anexamos el punto real en memoria
+    fila_actual = pd.DataFrame([{"fecha": ahora, "precio": float(usd_mayorista)}])
     historico = (
         pd.concat([historico, fila_actual], ignore_index=True)
         .drop_duplicates(subset=["fecha"], keep="last")
@@ -207,7 +175,7 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual” (sea real por API o aproximación del histórico)
+# Punto “actual” (real por proxy o aproximación)
 if not historico.empty:
     punto_actual = historico.iloc[-1]
     fig.add_trace(go.Scatter(
