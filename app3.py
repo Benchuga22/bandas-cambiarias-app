@@ -20,34 +20,47 @@ HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
 # -------------------------------
 # FUNCIONES
 # -------------------------------
-@st.cache_data(ttl=300)  # cachea 5 minutos
+@st.cache_data(ttl=300)
 def traer_precio_api():
-    """Trae el último precio del dólar mayorista desde la API del MAE."""
+    """Trae el último precio del dólar mayorista desde la API del MAE.
+       Detecta bloqueos de Incapsula y evita romper el app."""
     if not API_KEY:
-        st.warning("Falta API_KEY (secrets['API_KEY'] o variable de entorno MAE_API_KEY).")
+        st.warning("Falta API_KEY (secrets['API_KEY'] o MAE_API_KEY).")
         return None
 
+    # Headers más 'humanos' para evitar heurísticas de bot
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Origin": "https://www.mae.com.ar",
+        "Referer": "https://www.mae.com.ar/",
+        "Connection": "keep-alive",
+    }
+
     try:
-        response = requests.get(API_URL, headers=HEADERS, timeout=10)
+        resp = requests.get(API_URL, headers=headers, timeout=10, allow_redirects=False)
 
-        if response.status_code != 200:
-            st.warning(f"API devolvió status {response.status_code}")
-            st.text_area("Respuesta API", response.text[:1000], height=150)
+        # Si no es 200, lo mostramos y salimos
+        if resp.status_code != 200:
+            st.warning(f"API devolvió status {resp.status_code}")
+            st.text_area("Respuesta API", resp.text[:1000], height=150)
             return None
 
-        # Intentar parsear JSON
-        try:
-            data = response.json()
-        except Exception:
-            st.warning("Respuesta no es JSON válido")
-            st.text_area("Respuesta API (texto crudo)", response.text[:1000], height=150)
+        # Si el content-type no es JSON o contiene HTML, probablemente es Incapsula
+        ctype = resp.headers.get("Content-Type", "")
+        if "json" not in ctype.lower() or "<html" in resp.text.lower():
+            st.warning("La respuesta no parece JSON (posible bloqueo de Incapsula).")
+            st.text_area("Respuesta API", resp.text[:1000], height=150)
             return None
 
-        # Si viene como string con JSON adentro
+        data = resp.json()
         if isinstance(data, str):
             data = json.loads(data)
 
-        # Normalizar estructura
         if isinstance(data, dict) and "data" in data:
             cotizaciones = data["data"]
         elif isinstance(data, list):
@@ -68,6 +81,7 @@ def traer_precio_api():
     except Exception as e:
         st.error(f"Error al consultar API: {e}")
         return None
+
 
 
 def cargar_historico_desde_xlsx(carpeta="."):
@@ -144,18 +158,7 @@ except Exception as e:
 # Traer valor actual desde API (cacheado 5 min)
 usd_mayorista = traer_precio_api()
 
-if usd_mayorista is None and not historico.empty:
-    ultimo_hist = historico.sort_values("fecha").iloc[-1]["precio"]
-    st.info("No se pudo leer el spot en tiempo real; usando el último valor del histórico.")
-    # Si igual querés marcar un punto 'actual' con el último histórico:
-    ahora = datetime.now().replace(second=0, microsecond=0)
-    fila_aprox = pd.DataFrame([{"fecha": ahora, "precio": float(ultimo_hist)}])
-    historico = (
-        pd.concat([historico, fila_aprox], ignore_index=True)
-        .drop_duplicates(subset=["fecha"], keep="last")
-        .sort_values("fecha")
-        .reset_index(drop=True)
-    )
+
 
 # Cargar histórico desde el único Excel y, si hay API, anexar spot en memoria
 try:
