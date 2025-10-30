@@ -1,49 +1,53 @@
 import os
 import json
+from pathlib import Path
+from datetime import datetime
+
 import requests
 import pandas as pd
-from datetime import datetime
 import streamlit as st
 import plotly.graph_objects as go
 
 # -------------------------------
 # CONFIG
 # -------------------------------
-ARCHIVO_HISTORICO = "historico_mayorista.csv"
 API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
 
-# Leemos la API Key desde los secrets de Streamlit
-API_KEY = st.secrets["API_KEY"]
-HEADERS = {"x-api-key": API_KEY}
-
+# API key: primero busca en secrets de Streamlit, si no en variable de entorno
+API_KEY = st.secrets.get("API_KEY", os.getenv("MAE_API_KEY"))
+HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
 
 # -------------------------------
 # FUNCIONES
 # -------------------------------
-@st.cache_data(ttl=300)  # cachea el resultado por 5 minutos
+@st.cache_data(ttl=300)  # cachea 5 minutos
 def traer_precio_api():
-    """Trae el último precio del dólar mayorista desde la API del MAE"""
+    """Trae el último precio del dólar mayorista desde la API del MAE."""
+    if not API_KEY:
+        st.warning("Falta API_KEY (secrets['API_KEY'] o variable de entorno MAE_API_KEY).")
+        return None
+
     try:
         response = requests.get(API_URL, headers=HEADERS, timeout=10)
 
         if response.status_code != 200:
             st.warning(f"API devolvió status {response.status_code}")
-            st.text_area("Respuesta API", response.text[:500], height=150)
+            st.text_area("Respuesta API", response.text[:1000], height=150)
             return None
 
-        # Intentamos parsear JSON
+        # Intentar parsear JSON
         try:
             data = response.json()
         except Exception:
             st.warning("Respuesta no es JSON válido")
-            st.text_area("Respuesta API (texto crudo)", response.text[:500], height=150)
+            st.text_area("Respuesta API (texto crudo)", response.text[:1000], height=150)
             return None
 
-        # Caso 1: si viene como string con JSON adentro
+        # Si viene como string con JSON adentro
         if isinstance(data, str):
             data = json.loads(data)
 
-        # Caso 2: si viene como {"data": [...]} o ya como lista
+        # Normalizar estructura
         if isinstance(data, dict) and "data" in data:
             cotizaciones = data["data"]
         elif isinstance(data, list):
@@ -52,7 +56,8 @@ def traer_precio_api():
             cotizaciones = []
 
         usd_mayorista = next(
-            (item["precioUltimo"] for item in cotizaciones
+            (item.get("precioUltimo")
+             for item in cotizaciones
              if isinstance(item, dict)
              and item.get("ticker") == "UST$T"
              and item.get("plazo") == "000"),
@@ -65,102 +70,153 @@ def traer_precio_api():
         return None
 
 
-def actualizar_historico(usd_mayorista):
-    """Guarda el valor spot en el histórico asegurando fechas limpias"""
-    ahora = datetime.now().replace(second=0, microsecond=0)  # ⏱️ redondeamos a minuto exacto
+def cargar_historico_desde_xlsx(carpeta="."):
+    """
+    Carga histórico desde el primer .xlsx/.xls encontrado en 'carpeta'.
+    Normaliza columnas (Fecha, Volumen, Precio) y devuelve solo ['fecha','precio'].
+    Filtra a fechas con año >= 2025.
+    """
+    xls = [p for p in Path(carpeta).glob("*.xls*") if not p.name.startswith("~$")]
+    if not xls:
+        raise FileNotFoundError("No se encontró ningún archivo .xlsx en la carpeta actual.")
+    if len(xls) > 1:
+        st.warning(f"Se encontraron varios Excel, se usará: {xls[0].name}")
 
-    nuevo = pd.DataFrame([{
-        "fecha": ahora.strftime("%Y-%m-%d %H:%M:%S"),
-        "precio": usd_mayorista
-    }])
+    df = pd.read_excel(xls[0], engine="openpyxl")
 
-    if os.path.exists(ARCHIVO_HISTORICO):
-        historico = pd.read_csv(ARCHIVO_HISTORICO)
-        historico = pd.concat([historico, nuevo], ignore_index=True)
-    else:
-        historico = nuevo
+    # Normalizar nombres de columnas
+    df.columns = [c.strip().lower() for c in df.columns]
+    ren = {}
+    if "fecha" not in df.columns:
+        for c in df.columns:
+            if c.lower().startswith("fecha"):
+                ren[c] = "fecha"
+    if "precio" not in df.columns:
+        for c in df.columns:
+            if c.lower().startswith("precio"):
+                ren[c] = "precio"
+    if ren:
+        df = df.rename(columns=ren)
 
-    # Aseguramos formato de fecha
-    historico["fecha"] = pd.to_datetime(
-        historico["fecha"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
-    )
+    if "fecha" not in df.columns or "precio" not in df.columns:
+        raise ValueError("El Excel debe contener columnas 'Fecha' y 'Precio'.")
 
-    # Ordenar por fecha y eliminar duplicados por minuto
-    historico = historico.sort_values("fecha")
-    historico = historico.drop_duplicates(subset=["fecha"], keep="last")
+    # Parseo robusto de fecha (prioriza día/mes/año, tolera mezclas)
+    df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["fecha"])
 
-    # Guardar limpio
-    historico.to_csv(ARCHIVO_HISTORICO, index=False)
+    # Filtrar a año >= 2025
+    df = df[df["fecha"].dt.year >= 2025]
 
-    return historico
+    # Quedarse solo con lo necesario
+    df = df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
+    return df
+
+
+def cargar_bandas_desde_csv(path="bandas.csv"):
+    """Carga bandas desde CSV y asegura columnas fecha, piso, techo, promedio."""
+    bandas = pd.read_csv(path)
+    bandas.columns = [c.strip().lower() for c in bandas.columns]
+
+    requeridas = {"fecha", "piso", "techo", "promedio"}
+    if not requeridas.issubset(set(bandas.columns)):
+        faltan = requeridas - set(bandas.columns)
+        raise ValueError(f"Columnas faltantes en bandas.csv: {', '.join(sorted(faltan))}")
+
+    bandas["fecha"] = pd.to_datetime(bandas["fecha"], dayfirst=True, errors="coerce")
+    bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
+    return bandas
 
 
 # -------------------------------
 # APP STREAMLIT
 # -------------------------------
 st.set_page_config(page_title="Bandas Cambiarias", layout="wide")
+st.title("Dólar Mayorista vs Bandas Cambiarias")
 
-st.title("📊 Dólar Mayorista vs Bandas Cambiarias")
+# Cargar bandas
+try:
+    bandas = cargar_bandas_desde_csv("bandas.csv")
+except Exception as e:
+    st.error(f"No se pudieron cargar las bandas: {e}")
+    st.stop()
 
-# --- Bandas desde CSV ---
-bandas = pd.read_csv("bandas.csv")
-bandas["fecha"] = pd.to_datetime(bandas["fecha"], dayfirst=True, errors="coerce")
-
-# --- Traer valor actual desde API (cacheado 5 min) ---
+# Traer valor actual desde API (cacheado 5 min)
 usd_mayorista = traer_precio_api()
 
-# --- Actualizar histórico ---
-if usd_mayorista:
-    historico = actualizar_historico(usd_mayorista)
-    ahora = datetime.now()
-else:
-    st.warning("No se pudo obtener el valor del dólar mayorista en tiempo real.")
-    if os.path.exists(ARCHIVO_HISTORICO):
-        historico = pd.read_csv(ARCHIVO_HISTORICO)
-        historico["fecha"] = pd.to_datetime(historico["fecha"], errors="coerce")
-    else:
-        historico = pd.DataFrame(columns=["fecha", "precio"])
-    ahora = datetime.now()
+# Cargar histórico desde el único Excel y, si hay API, anexar spot en memoria
+try:
+    historico = cargar_historico_desde_xlsx(".")
+except Exception as e:
+    st.error(f"No se pudo cargar el histórico desde Excel: {e}")
+    historico = pd.DataFrame(columns=["fecha", "precio"])
 
-# --- Plotly ---
+ahora = datetime.now().replace(second=0, microsecond=0)
+
+if usd_mayorista is not None:
+    fila_actual = pd.DataFrame([{"fecha": ahora, "precio": usd_mayorista}])
+    historico = (
+        pd.concat([historico, fila_actual], ignore_index=True)
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .sort_values("fecha")
+        .reset_index(drop=True)
+    )
+else:
+    st.warning("No se pudo obtener el valor del dólar mayorista en tiempo real; se grafica solo el histórico del Excel.")
+
+# -------------------------------
+# GRÁFICO
+# -------------------------------
 fig = go.Figure()
 
 # Histórico
-fig.add_trace(go.Scatter(
-    x=historico["fecha"], y=historico["precio"],
-    mode="lines",
-    name="USD Mayorista",
-    line=dict(color="black")
-))
+if not historico.empty:
+    fig.add_trace(go.Scatter(
+        x=historico["fecha"],
+        y=historico["precio"],
+        mode="lines",
+        name="USD Mayorista",
+        line=dict(color="black")
+    ))
 
 # Bandas
-fig.add_trace(go.Scatter(x=bandas["fecha"], y=bandas["piso"], mode="lines", name="Piso Banda",
-                         line=dict(color="red", dash="dash")))
-fig.add_trace(go.Scatter(x=bandas["fecha"], y=bandas["techo"], mode="lines", name="Techo Banda",
-                         line=dict(color="green", dash="dash")))
-fig.add_trace(go.Scatter(x=bandas["fecha"], y=bandas["promedio"], mode="lines", name="Promedio Banda",
-                         line=dict(color="blue", dash="dot")))
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["piso"],
+    mode="lines", name="Piso Banda",
+    line=dict(color="red", dash="dash")
+))
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["techo"],
+    mode="lines", name="Techo Banda",
+    line=dict(color="green", dash="dash")
+))
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["promedio"],
+    mode="lines", name="Promedio Banda",
+    line=dict(color="blue", dash="dot")
+))
 
 # Punto spot actual
-if usd_mayorista:
+if usd_mayorista is not None:
     fig.add_trace(go.Scatter(
         x=[ahora], y=[usd_mayorista],
         mode="markers+text",
         name="USD Actual",
-        marker=dict(color="orange", size=8),
+        marker=dict(size=8),
         text=[f"${usd_mayorista}"],
         textposition="top right"
     ))
 
-# Layout general
 fig.update_layout(
-    title=f"Dólar Mayorista vs Bandas Cambiarias<br><sup>Última actualización: {ahora.strftime('%Y-%m-%d %H:%M:%S')}</sup>",
+    title=f"Dólar Mayorista vs Bandas Cambiarias"
+          f"<br><sup>Última actualización: {ahora.strftime('%Y-%m-%d %H:%M:%S')}</sup>",
     xaxis_title="Fecha",
     yaxis_title="Precio",
     template="plotly_white",
     plot_bgcolor="white",
     paper_bgcolor="white",
-    font=dict(color="black")
+    font=dict(color="black"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 
 st.plotly_chart(fig, use_container_width=True)
