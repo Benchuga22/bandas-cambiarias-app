@@ -15,6 +15,10 @@ import plotly.graph_objects as go
 PROXY_URL = st.secrets.get("PROXY_URL", os.getenv("PROXY_URL"))
 DOLARAPI_URL = "https://dolarapi.com/v1/dolares/mayorista"
 TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
+HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "BandasCambiarias/1.0 (+contacto@example.com)"
+}
 
 # -------------------------------
 # FUNCIONES
@@ -25,7 +29,7 @@ def traer_venta_dolarapi():
     Llama a DolarAPI y devuelve (venta, fecha_actualizacion_en_AR) o (None, None).
     """
     try:
-        r = requests.get(DOLARAPI_URL, timeout=10)
+        r = requests.get(DOLARAPI_URL, headers=HEADERS, timeout=10)
         if r.status_code != 200:
             return None, None
         data = r.json()
@@ -35,7 +39,7 @@ def traer_venta_dolarapi():
         fecha_api = data.get("fechaActualizacion")
         api_dt = None
         if isinstance(fecha_api, str):
-            # viene como ISO UTC (termina en Z): la pasamos a AR
+            # viene ISO UTC con 'Z' -> convertir a AR para mostrar
             api_dt = datetime.fromisoformat(fecha_api.replace("Z", "+00:00")).astimezone(TZ_AR)
         return (float(venta) if venta is not None else None), api_dt
     except Exception:
@@ -93,7 +97,7 @@ def cargar_historico_desde_xlsx(carpeta="."):
     if "fecha" not in df.columns or "precio" not in df.columns:
         raise ValueError("El Excel debe contener columnas 'Fecha' y 'Precio'.")
 
-    # Parseo fechas con tolerancia a mezclas y dayfirst
+    # Parseo fechas con tolerancia (naive)
     df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True, errors="coerce")
     df = df.dropna(subset=["fecha"])
 
@@ -146,7 +150,10 @@ venta_api, fecha_api_ar = traer_venta_dolarapi()
 # 2) Si DolarAPI falla, intento proxy
 usd_mayorista = None
 fuente_actual = None
-ahora_ar = datetime.now(TZ_AR).replace(second=0, microsecond=0)
+
+# Hora actual: con tz para mostrar y naive para guardar en DF
+ahora_ar = datetime.now(TZ_AR).replace(second=0, microsecond=0)   # para mostrar
+ahora_naive = ahora_ar.replace(tzinfo=None)                       # para DF (evitar mix aware/naive)
 
 if venta_api is not None:
     usd_mayorista = venta_api
@@ -164,7 +171,7 @@ if usd_mayorista is None:
     if not historico.empty:
         ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
         st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
-        fila_aprox = pd.DataFrame([{"fecha": ahora_ar, "precio": ultimo_hist}])
+        fila_aprox = pd.DataFrame([{"fecha": ahora_naive, "precio": ultimo_hist}])
         historico = (
             pd.concat([historico, fila_aprox], ignore_index=True)
             .drop_duplicates(subset=["fecha"], keep="last")
@@ -172,8 +179,8 @@ if usd_mayorista is None:
             .reset_index(drop=True)
         )
 else:
-    # Si tenemos precio actual, anexamos el punto real en memoria
-    fila_actual = pd.DataFrame([{"fecha": ahora_ar, "precio": float(usd_mayorista)}])
+    # Si tenemos precio actual, anexamos el punto real en memoria (fecha naive)
+    fila_actual = pd.DataFrame([{"fecha": ahora_naive, "precio": float(usd_mayorista)}])
     historico = (
         pd.concat([historico, fila_actual], ignore_index=True)
         .drop_duplicates(subset=["fecha"], keep="last")
@@ -225,7 +232,6 @@ if not historico.empty:
         textposition="top right"
     ))
 
-# Sin título en el gráfico; sólo ejes y leyenda
 fig.update_layout(
     xaxis_title="Fecha",
     yaxis_title="Precio",
