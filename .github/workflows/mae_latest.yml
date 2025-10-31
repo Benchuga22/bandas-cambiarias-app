@@ -39,12 +39,9 @@ jobs:
           out_path = out_dir / "latest.json"
 
           def write_placeholder():
-              if not out_path.exists():
-                  with open(out_path, "w") as f:
-                      json.dump({"precio": None, "t": int(time.time())}, f, separators=(",",":"))
-                  print("created placeholder latest.json (precio=null)")
-              else:
-                  print("kept existing latest.json")
+              with open(out_path, "w") as f:
+                  json.dump({"precio": None, "t": int(time.time())}, f, separators=(",",":"))
+              print("latest.json placeholder ensured")
 
           precio = None
           if KEY:
@@ -72,7 +69,7 @@ jobs:
           if precio is not None:
               with open(out_path, "w") as f:
                   json.dump({"precio": float(precio), "t": int(time.time())}, f, separators=(",",":"))
-              print("latest.json updated")
+              print("latest.json updated with precio")
           else:
               write_placeholder()
           PY
