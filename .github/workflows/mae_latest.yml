@@ -37,10 +37,17 @@ jobs:
           KEY = os.environ.get("MAE_API_KEY")
           out_dir = pathlib.Path("public"); out_dir.mkdir(parents=True, exist_ok=True)
           out_path = out_dir / "latest.json"
+
+          def write_placeholder():
+              if not out_path.exists():
+                  with open(out_path, "w") as f:
+                      json.dump({"precio": None, "t": int(time.time())}, f, separators=(",",":"))
+                  print("created placeholder latest.json (precio=null)")
+              else:
+                  print("kept existing latest.json")
+
           precio = None
-          if not KEY:
-              print("MAE_API_KEY missing", file=sys.stderr)
-          else:
+          if KEY:
               headers = {
                   "x-api-key": KEY,
                   "Accept": "application/json, text/plain, */*",
@@ -59,21 +66,15 @@ jobs:
                       print(f"Upstream not OK: {r.status_code}", file=sys.stderr)
               except Exception as e:
                   print(f"Fetch error: {e}", file=sys.stderr)
+          else:
+              print("MAE_API_KEY missing", file=sys.stderr)
 
           if precio is not None:
-              payload = {"precio": float(precio), "t": int(time.time())}
               with open(out_path, "w") as f:
-                  json.dump(payload, f, separators=(",",":"))
+                  json.dump({"precio": float(precio), "t": int(time.time())}, f, separators=(",",":"))
               print("latest.json updated")
           else:
-              # Si no hay precio: si ya existía el archivo, lo dejamos igual.
-              # Si no existía, creamos un placeholder para no romper el git add.
-              if not out_path.exists():
-                  with open(out_path, "w") as f:
-                      json.dump({"precio": None, "t": int(time.time())}, f, separators=(",",":"))
-                  print("latest.json placeholder created (precio: null)")
-              else:
-                  print("No update; keeping existing latest.json")
+              write_placeholder()
           PY
 
       - name: Commit latest.json if changed
