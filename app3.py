@@ -220,15 +220,24 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual”
-if not historico.empty:
-    punto_actual = historico.iloc[-1]
+# Punto “actual” (prioriza DolarAPI si está disponible)
+if venta_api is not None:
+    x_pt = ahora_naive
+    y_pt = float(venta_api)
+elif not historico.empty:
+    ultimo = historico.iloc[-1]
+    x_pt = ultimo["fecha"]
+    y_pt = float(ultimo["precio"])
+else:
+    x_pt, y_pt = None, None
+
+if x_pt is not None and y_pt is not None:
     fig.add_trace(go.Scatter(
-        x=[punto_actual["fecha"]], y=[punto_actual["precio"]],
+        x=[x_pt], y=[y_pt],
         mode="markers+text",
         name="USD Actual",
         marker=dict(size=8),
-        text=[f"${punto_actual['precio']:.2f}"],
+        text=[f"${y_pt:,.0f}"],   # sin decimales
         textposition="top right"
     ))
 
