@@ -305,6 +305,14 @@ st.plotly_chart(fig, use_container_width=True)
 subtitulo_fuente = f"Fuente: {fuente_actual} • Última actualización (AR): {ahora_ar.strftime('%Y-%m-%d %H:%M:%S')}"
 st.caption(subtitulo_fuente)
 
+# Footer de contacto
+st.markdown(
+    "<div style='text-align:center; color:#6b7280; font-size:12px; margin-top:8px;'>"
+    "Consultas o feedback: <a href='mailto:benjamingomezalonso@gmail.com'>benjamingomezalonso@gmail.com</a>"
+    "</div>",
+    unsafe_allow_html=True
+)
+
 # Métrica rápida
 #st.subheader("")
 #col1, col2 = st.columns(2)
