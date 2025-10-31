@@ -276,15 +276,14 @@ fig.add_vline(
     opacity=0.9,
 )
 
-# Anotación arriba de la línea
 fig.add_annotation(
     x=inicio_regimen,
     yref="paper",
-    y=1.02,                 # un poquito encima del área del gráfico
+    y=0.93,                 # antes: 1.02
     xanchor="left",
     showarrow=False,
     text="Inicio régimen monetario de bandas cambiarias",
-    font=dict(size=12, color="gray")
+    font=dict(size=12, color="black")
 )
 
 # Sombreado tenue hacia la derecha del inicio
