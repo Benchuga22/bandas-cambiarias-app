@@ -167,26 +167,26 @@ else:
         fuente_actual = "Histórico (fallback)"
 
 # Fallback: si ambas fuentes fallan, usar último valor del histórico como punto “actual”
-if usd_mayorista is None:
-    if not historico.empty:
-        ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
-        st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
-        fila_aprox = pd.DataFrame([{"fecha": ahora_naive, "precio": ultimo_hist}])
-        historico = (
-            pd.concat([historico, fila_aprox], ignore_index=True)
-            .drop_duplicates(subset=["fecha"], keep="last")
-            .sort_values("fecha")
-            .reset_index(drop=True)
-        )
-else:
-    # Si tenemos precio actual, anexamos el punto real en memoria (fecha naive)
-    fila_actual = pd.DataFrame([{"fecha": ahora_naive, "precio": float(usd_mayorista)}])
-    historico = (
-        pd.concat([historico, fila_actual], ignore_index=True)
-        .drop_duplicates(subset=["fecha"], keep="last")
-        .sort_values("fecha")
-        .reset_index(drop=True)
-    )
+# if usd_mayorista is None:
+#     if not historico.empty:
+#         ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
+#         st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
+#         fila_aprox = pd.DataFrame([{"fecha": ahora_naive, "precio": ultimo_hist}])
+#         historico = (
+#             pd.concat([historico, fila_aprox], ignore_index=True)
+#             .drop_duplicates(subset=["fecha"], keep="last")
+#             .sort_values("fecha")
+#             .reset_index(drop=True)
+#         )
+# else:
+#     # Si tenemos precio actual, anexamos el punto real en memoria (fecha naive)
+#     fila_actual = pd.DataFrame([{"fecha": ahora_naive, "precio": float(usd_mayorista)}])
+#     historico = (
+#         pd.concat([historico, fila_actual], ignore_index=True)
+#         .drop_duplicates(subset=["fecha"], keep="last")
+#         .sort_values("fecha")
+#         .reset_index(drop=True)
+#     )
 
 # -------------------------------
 # GRÁFICO (sin título)
@@ -220,16 +220,18 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual” (prioriza DolarAPI si está disponible)
+# Punto “actual” (NO desde el df, solo desde API/proxy si hay)
+x_pt, y_pt = None, None
+
 if venta_api is not None:
     x_pt = ahora_naive
     y_pt = float(venta_api)
-elif not historico.empty:
-    ultimo = historico.iloc[-1]
-    x_pt = ultimo["fecha"]
-    y_pt = float(ultimo["precio"])
 else:
-    x_pt, y_pt = None, None
+    proxy_precio = traer_precio_api_via_proxy()
+    if proxy_precio is not None:
+        x_pt = ahora_naive
+        y_pt = float(proxy_precio)
+    # si tampoco hay proxy, NO dibujamos punto; solo la línea histórica
 
 if x_pt is not None and y_pt is not None:
     fig.add_trace(go.Scatter(
