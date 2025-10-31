@@ -1,0 +1,6 @@
+[theme]
+base = "light"                 # fuerza modo claro por defecto
+primaryColor = "#111827"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F6F6"
+textColor = "#000000"
