@@ -255,6 +255,50 @@ fig.update_layout(
     margin=dict(t=10)           # opcional: reduce el espacio superior
 )
 
+# === Marca de inicio del régimen y sombreado hacia adelante ===
+# Tomo como inicio el primer día de las bandas (ajustalo si querés una fecha fija)
+inicio_regimen = pd.to_datetime(bandas["fecha"].min())
+
+# Límite derecho del sombreado = máx entre tu histórico y las bandas
+x_max = pd.to_datetime(
+    max(
+        bandas["fecha"].max() if not bandas.empty else inicio_regimen,
+        historico["fecha"].max() if not historico.empty else inicio_regimen,
+    )
+)
+
+# Línea vertical del inicio
+fig.add_vline(
+    x=inicio_regimen,
+    line_width=1,
+    line_dash="dot",
+    line_color="gray",
+    opacity=0.9,
+)
+
+# Anotación arriba de la línea
+fig.add_annotation(
+    x=inicio_regimen,
+    yref="paper",
+    y=1.02,                 # un poquito encima del área del gráfico
+    xanchor="left",
+    showarrow=False,
+    text="Inicio régimen monetario de bandas cambiarias",
+    font=dict(size=12, color="gray")
+)
+
+# Sombreado tenue hacia la derecha del inicio
+fig.add_shape(
+    type="rect",
+    xref="x", yref="paper",
+    x0=inicio_regimen, x1=x_max,
+    y0=0, y1=1,
+    fillcolor="lightgrey",
+    opacity=0.12,           # más/menos tenue
+    line_width=0,
+    layer="below"           # por debajo de las líneas
+)
+
 
 st.plotly_chart(fig, use_container_width=True)
 
