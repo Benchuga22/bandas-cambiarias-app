@@ -252,9 +252,9 @@ subtitulo_fuente = f"Fuente: {fuente_actual} • Última actualización (AR): {a
 st.caption(subtitulo_fuente)
 
 # Métrica rápida
-st.subheader("")
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("USD Mayorista (venta)", f"${usd_mayorista:.2f}" if usd_mayorista is not None else "s/d")
-with col2:
-    st.caption("Visualización en AR; valores en $/USD.")
+#st.subheader("")
+#col1, col2 = st.columns(2)
+#with col1:
+#    st.metric("USD Mayorista (venta)", f"${usd_mayorista:.2f}" if usd_mayorista is not None else "s/d")
+#with col2:
+#    st.caption("Visualización en AR; valores en $/USD.")
