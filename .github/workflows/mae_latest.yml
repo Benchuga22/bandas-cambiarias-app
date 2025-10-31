@@ -1,36 +1,70 @@
 name: fetch-mae-latest
+
 on:
-  schedule: [{ cron: "*/5 * * * *" }]
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
-permissions: { contents: write }
-concurrency: { group: mae-latest, cancel-in-progress: true }
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mae-latest
+  cancel-in-progress: true
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install requests
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
       - name: Fetch MAE and write latest.json
-        env: { MAE_API_KEY: ${{ secrets.MAE_API_KEY }} }
+        env:
+          MAE_API_KEY: ${{ secrets.MAE_API_KEY }}
         run: |
           python - << 'PY'
           import os, json, time, requests, sys
           API_URL = "https://api.mae.com.ar/MarketData/v1/mercado/cotizaciones/forex"
           KEY = os.environ.get("MAE_API_KEY")
-          if not KEY: print("MAE_API_KEY missing", file=sys.stderr); sys.exit(1)
-          headers = {"x-api-key": KEY, "Accept": "application/json, text/plain, */*", "User-Agent": "Mozilla/5.0",
-                     "Origin": "https://www.mae.com.ar", "Referer": "https://www.mae.com.ar/"}
-          r = requests.get(API_URL, headers=headers, timeout=20)
-          if r.status_code != 200 or "<html" in r.text.lower(): sys.exit(0)
-          data = r.json()
-          cot = data["data"] if isinstance(data, dict) and "data" in data else data
-          p = next((i.get("precioUltimo") for i in cot if isinstance(i, dict) and i.get("ticker")=="UST$T" and i.get("plazo")=="000"), None)
-          if p is None: sys.exit(0)
-          os.makedirs("public", exist_ok=True)
-          with open("public/latest.json","w") as f: json.dump({"precio": float(p), "t": int(time.time())}, f, separators=(",",":"))
+          if not KEY:
+              print("MAE_API_KEY missing", file=sys.stderr)
+              sys.exit(1)
+          headers = {
+              "x-api-key": KEY,
+              "Accept": "application/json, text/plain, */*",
+              "User-Agent": "Mozilla/5.0",
+              "Origin": "https://www.mae.com.ar",
+              "Referer": "https://www.mae.com.ar/",
+          }
+          try:
+              r = requests.get(API_URL, headers=headers, timeout=20)
+              if r.status_code != 200 or "<html" in r.text.lower():
+                  print(f"Upstream not OK: {r.status_code}", file=sys.stderr)
+                  sys.exit(0)
+              data = r.json()
+              cot = data["data"] if isinstance(data, dict) and "data" in data else data
+              precio = next((i.get("precioUltimo") for i in cot
+                             if isinstance(i, dict) and i.get("ticker")=="UST$T" and i.get("plazo")=="000"), None)
+              if precio is None:
+                  print("precio not found", file=sys.stderr)
+                  sys.exit(0)
+              os.makedirs("public", exist_ok=True)
+              with open("public/latest.json","w") as f:
+                  json.dump({"precio": float(precio), "t": int(time.time())}, f, separators=(",",":"))
+          except Exception as e:
+              print(f"Error: {e}", file=sys.stderr)
+              sys.exit(0)
           PY
+
       - name: Commit latest.json
         run: |
           git config user.name "github-actions[bot]"
