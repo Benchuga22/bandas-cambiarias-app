@@ -1,8 +1,7 @@
 import os
 import json
 from pathlib import Path
-from datetime import datetime
-
+from datetime import datetime, timezone
 import requests
 import pandas as pd
 import streamlit as st
@@ -13,19 +12,54 @@ import plotly.graph_objects as go
 # -------------------------------
 # URL de tu proxy FastAPI (poner en Streamlit Secrets o variable de entorno)
 PROXY_URL = st.secrets.get("PROXY_URL", os.getenv("PROXY_URL"))
-LATEST_URL = "https://raw.githubusercontent.com/Benchuga22/bandas-cambiarias-app/main/public/latest.json"
+DOLARAPI_URL = "https://dolarapi.com/v1/dolares/mayorista"
 
 # -------------------------------
 # FUNCIONES
 # -------------------------------
 @st.cache_data(ttl=120)
-def traer_precio_desde_latest():
+def traer_venta_dolarapi():
+    """
+    Llama a DolarAPI y devuelve (venta, fecha_actualizacion) o (None, None) si falla.
+    """
     try:
-        r = requests.get(LATEST_URL, timeout=10)
+        r = requests.get(DOLARAPI_URL, timeout=10)
+        if r.status_code != 200:
+            return None, None
+        data = r.json()
+        # Por si alguna vez responde string JSON
+        if isinstance(data, str):
+            data = json.loads(data)
+        venta = data.get("venta")
+        fecha_api = data.get("fechaActualizacion")
+        # Normalizo fecha API (ISO Z -> datetime)
+        api_dt = None
+        if isinstance(fecha_api, str):
+            try:
+                api_dt = datetime.fromisoformat(fecha_api.replace("Z", "+00:00")).astimezone()
+            except Exception:
+                api_dt = None
+        return float(venta) if venta is not None else None, api_dt
+    except Exception:
+        return None, None
+
+
+@st.cache_data(ttl=300)
+def traer_precio_api_via_proxy():
+    """
+    Llama al proxy (FastAPI) que consulta el MAE y devuelve {precio: ...}.
+    Devuelve None si falla.
+    """
+    if not PROXY_URL:
+        return None
+    try:
+        r = requests.get(f"{PROXY_URL.rstrip('/')}/mae/latest", timeout=10)
         if r.status_code != 200:
             return None
         data = r.json()
-        return float(data.get("precio")) if data.get("precio") is not None else None
+        if isinstance(data, str):
+            data = json.loads(data)
+        return data.get("precio")
     except Exception:
         return None
 
@@ -42,7 +76,6 @@ def cargar_historico_desde_xlsx(carpeta="."):
     if len(xls) > 1:
         st.warning(f"Se encontraron varios Excel, se usará: {xls[0].name}")
 
-    # requiere openpyxl en requirements.txt
     df = pd.read_excel(xls[0], engine="openpyxl")
 
     # Normalizar columnas
@@ -109,16 +142,31 @@ except Exception as e:
     st.error(f"No se pudo cargar el histórico desde Excel: {e}")
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
-# Traer spot via proxy
-usd_mayorista = traer_precio_desde_latest()
-ahora = datetime.now().replace(second=0, microsecond=0)
+# 1) Intento con DolarAPI (venta)
+venta_api, fecha_api = traer_venta_dolarapi()
 
-# Fallback: si el proxy falla, usar último valor del histórico como punto “actual”
+# 2) Si DolarAPI falla, intento proxy
+usd_mayorista = None
+fuente_actual = None
+ahora_local = datetime.now().replace(second=0, microsecond=0)
+
+if venta_api is not None:
+    usd_mayorista = venta_api
+    fuente_actual = f"DolarAPI (actualizado: {fecha_api.strftime('%Y-%m-%d %H:%M:%S %Z') if isinstance(fecha_api, datetime) else 's/d'})"
+else:
+    proxy_precio = traer_precio_api_via_proxy()
+    if proxy_precio is not None:
+        usd_mayorista = float(proxy_precio)
+        fuente_actual = "Proxy MAE"
+    else:
+        fuente_actual = "Histórico (fallback)"
+
+# Fallback: si ambas fuentes fallan, usar último valor del histórico como punto “actual”
 if usd_mayorista is None:
     if not historico.empty:
         ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
-        st.info("No se pudo leer el spot en tiempo real (proxy/API). Se usa el último valor del histórico.")
-        fila_aprox = pd.DataFrame([{"fecha": ahora, "precio": ultimo_hist}])
+        st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
+        fila_aprox = pd.DataFrame([{"fecha": ahora_local, "precio": ultimo_hist}])
         historico = (
             pd.concat([historico, fila_aprox], ignore_index=True)
             .drop_duplicates(subset=["fecha"], keep="last")
@@ -126,8 +174,8 @@ if usd_mayorista is None:
             .reset_index(drop=True)
         )
 else:
-    # Si el proxy devuelve precio, anexamos el punto real en memoria
-    fila_actual = pd.DataFrame([{"fecha": ahora, "precio": float(usd_mayorista)}])
+    # Si tenemos precio actual, anexamos el punto real en memoria
+    fila_actual = pd.DataFrame([{"fecha": ahora_local, "precio": float(usd_mayorista)}])
     historico = (
         pd.concat([historico, fila_actual], ignore_index=True)
         .drop_duplicates(subset=["fecha"], keep="last")
@@ -167,7 +215,7 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual” (real por proxy o aproximación)
+# Punto “actual” (real por API/proxy o aproximación)
 if not historico.empty:
     punto_actual = historico.iloc[-1]
     fig.add_trace(go.Scatter(
@@ -179,9 +227,12 @@ if not historico.empty:
         textposition="top right"
     ))
 
+subtitulo_fuente = f" • Fuente: {fuente_actual}" if fuente_actual else ""
 fig.update_layout(
-    title=f"Dólar Mayorista vs Bandas Cambiarias"
-          f"<br><sup>Última actualización: {ahora.strftime('%Y-%m-%d %H:%M:%S')}</sup>",
+    title=(
+        "Dólar Mayorista vs Bandas Cambiarias"
+        f"<br><sup>Última actualización local: {ahora_local.strftime('%Y-%m-%d %H:%M:%S')}{subtitulo_fuente}</sup>"
+    ),
     xaxis_title="Fecha",
     yaxis_title="Precio",
     template="plotly_white",
@@ -192,3 +243,10 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
+# Muestra rápida del valor actual si lo hay
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("USD Mayorista (venta)", f"${usd_mayorista:.2f}" if usd_mayorista is not None else "s/d")
+with col2:
+    st.caption(subtitulo_fuente[3:] if subtitulo_fuente else "")
