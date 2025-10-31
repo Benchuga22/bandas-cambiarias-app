@@ -13,27 +13,19 @@ import plotly.graph_objects as go
 # -------------------------------
 # URL de tu proxy FastAPI (poner en Streamlit Secrets o variable de entorno)
 PROXY_URL = st.secrets.get("PROXY_URL", os.getenv("PROXY_URL"))
+LATEST_URL = "https://raw.githubusercontent.com/Benchuga22/bandas-cambiarias-app/main/public/latest.json"
 
 # -------------------------------
 # FUNCIONES
 # -------------------------------
-@st.cache_data(ttl=300)
-def traer_precio_api_via_proxy():
-    """
-    Llama al proxy (FastAPI) que consulta el MAE y devuelve {precio: ...}.
-    Devuelve None si falla.
-    """
-    if not PROXY_URL:
-        return None
+@st.cache_data(ttl=120)
+def traer_precio_desde_latest():
     try:
-        r = requests.get(f"{PROXY_URL.rstrip('/')}/mae/latest", timeout=10)
+        r = requests.get(LATEST_URL, timeout=10)
         if r.status_code != 200:
             return None
         data = r.json()
-        # Por si el proxy alguna vez respondiera string JSON
-        if isinstance(data, str):
-            data = json.loads(data)
-        return data.get("precio")
+        return float(data.get("precio")) if data.get("precio") is not None else None
     except Exception:
         return None
 
@@ -118,7 +110,7 @@ except Exception as e:
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
 # Traer spot via proxy
-usd_mayorista = traer_precio_api_via_proxy()
+usd_mayorista = traer_precio_desde_latest()
 ahora = datetime.now().replace(second=0, microsecond=0)
 
 # Fallback: si el proxy falla, usar último valor del histórico como punto “actual”
