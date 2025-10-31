@@ -233,6 +233,7 @@ if not historico.empty:
     ))
 
 fig.update_layout(
+    title_text="",              # <= fuerza título vacío (evita 'undefined')
     xaxis_title="Fecha",
     yaxis_title="Precio",
     template="plotly_white",
@@ -240,8 +241,9 @@ fig.update_layout(
     paper_bgcolor="white",
     font=dict(color="black"),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    title=None
+    margin=dict(t=10)           # opcional: reduce el espacio superior
 )
+
 
 st.plotly_chart(fig, use_container_width=True)
 
