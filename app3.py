@@ -93,4 +93,160 @@ def cargar_historico_desde_xlsx(carpeta="."):
     if "fecha" not in df.columns or "precio" not in df.columns:
         raise ValueError("El Excel debe contener columnas 'Fecha' y 'Precio'.")
 
-    # Parseo fechas con tole
+    # Parseo fechas con tolerancia a mezclas y dayfirst
+    df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["fecha"])
+
+    # Filtro a 2025+
+    df = df[df["fecha"].dt.year >= 2025]
+
+    # Sólo lo necesario
+    df = df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
+    return df
+
+
+def cargar_bandas_desde_csv(path="bandas.csv"):
+    """Carga bandas desde CSV y asegura columnas fecha, piso, techo, promedio."""
+    bandas = pd.read_csv(path)
+    bandas.columns = [c.strip().lower() for c in bandas.columns]
+
+    requeridas = {"fecha", "piso", "techo", "promedio"}
+    if not requeridas.issubset(set(bandas.columns)):
+        faltan = requeridas - set(bandas.columns)
+        raise ValueError(f"Columnas faltantes en bandas.csv: {', '.join(sorted(faltan))}")
+
+    bandas["fecha"] = pd.to_datetime(bandas["fecha"], dayfirst=True, errors="coerce")
+    bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
+    return bandas
+
+
+# -------------------------------
+# APP STREAMLIT
+# -------------------------------
+st.set_page_config(page_title="Bandas Cambiarias", layout="wide")
+st.title("Dólar Mayorista vs Bandas Cambiarias")
+
+# Cargar bandas
+try:
+    bandas = cargar_bandas_desde_csv("bandas.csv")
+except Exception as e:
+    st.error(f"No se pudieron cargar las bandas: {e}")
+    st.stop()
+
+# Cargar histórico desde el único Excel
+try:
+    historico = cargar_historico_desde_xlsx(".")
+except Exception as e:
+    st.error(f"No se pudo cargar el histórico desde Excel: {e}")
+    historico = pd.DataFrame(columns=["fecha", "precio"])
+
+# 1) Intento con DolarAPI (venta)
+venta_api, fecha_api_ar = traer_venta_dolarapi()
+
+# 2) Si DolarAPI falla, intento proxy
+usd_mayorista = None
+fuente_actual = None
+ahora_ar = datetime.now(TZ_AR).replace(second=0, microsecond=0)
+
+if venta_api is not None:
+    usd_mayorista = venta_api
+    fuente_actual = f"DolarAPI (actualizado: {fecha_api_ar.strftime('%Y-%m-%d %H:%M:%S %Z') if isinstance(fecha_api_ar, datetime) else 's/d'})"
+else:
+    proxy_precio = traer_precio_api_via_proxy()
+    if proxy_precio is not None:
+        usd_mayorista = float(proxy_precio)
+        fuente_actual = "Proxy MAE"
+    else:
+        fuente_actual = "Histórico (fallback)"
+
+# Fallback: si ambas fuentes fallan, usar último valor del histórico como punto “actual”
+if usd_mayorista is None:
+    if not historico.empty:
+        ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
+        st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
+        fila_aprox = pd.DataFrame([{"fecha": ahora_ar, "precio": ultimo_hist}])
+        historico = (
+            pd.concat([historico, fila_aprox], ignore_index=True)
+            .drop_duplicates(subset=["fecha"], keep="last")
+            .sort_values("fecha")
+            .reset_index(drop=True)
+        )
+else:
+    # Si tenemos precio actual, anexamos el punto real en memoria
+    fila_actual = pd.DataFrame([{"fecha": ahora_ar, "precio": float(usd_mayorista)}])
+    historico = (
+        pd.concat([historico, fila_actual], ignore_index=True)
+        .drop_duplicates(subset=["fecha"], keep="last")
+        .sort_values("fecha")
+        .reset_index(drop=True)
+    )
+
+# -------------------------------
+# GRÁFICO (sin título)
+# -------------------------------
+fig = go.Figure()
+
+# Histórico
+if not historico.empty:
+    fig.add_trace(go.Scatter(
+        x=historico["fecha"],
+        y=historico["precio"],
+        mode="lines",
+        name="USD Mayorista",
+        line=dict(color="black")
+    ))
+
+# Bandas
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["piso"],
+    mode="lines", name="Piso Banda",
+    line=dict(color="red", dash="dash")
+))
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["techo"],
+    mode="lines", name="Techo Banda",
+    line=dict(color="green", dash="dash")
+))
+fig.add_trace(go.Scatter(
+    x=bandas["fecha"], y=bandas["promedio"],
+    mode="lines", name="Promedio Banda",
+    line=dict(color="blue", dash="dot")
+))
+
+# Punto “actual”
+if not historico.empty:
+    punto_actual = historico.iloc[-1]
+    fig.add_trace(go.Scatter(
+        x=[punto_actual["fecha"]], y=[punto_actual["precio"]],
+        mode="markers+text",
+        name="USD Actual",
+        marker=dict(size=8),
+        text=[f"${punto_actual['precio']:.2f}"],
+        textposition="top right"
+    ))
+
+# Sin título en el gráfico; sólo ejes y leyenda
+fig.update_layout(
+    xaxis_title="Fecha",
+    yaxis_title="Precio",
+    template="plotly_white",
+    plot_bgcolor="white",
+    paper_bgcolor="white",
+    font=dict(color="black"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    title=None
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# Caption con hora local AR y fuente
+subtitulo_fuente = f"Fuente: {fuente_actual} • Última actualización (AR): {ahora_ar.strftime('%Y-%m-%d %H:%M:%S')}"
+st.caption(subtitulo_fuente)
+
+# Métrica rápida
+st.subheader("")
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("USD Mayorista (venta)", f"${usd_mayorista:.2f}" if usd_mayorista is not None else "s/d")
+with col2:
+    st.caption("Visualización en AR; valores en $/USD.")
