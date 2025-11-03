@@ -207,12 +207,12 @@ if not historico.empty:
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["piso"],
     mode="lines", name="Piso Banda",
-    line=dict(color="red", dash="dash")
+    line=dict(color="green", dash="dash")
 ))
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["techo"],
     mode="lines", name="Techo Banda",
-    line=dict(color="green", dash="dash")
+    line=dict(color="red", dash="dash")
 ))
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["promedio"],
