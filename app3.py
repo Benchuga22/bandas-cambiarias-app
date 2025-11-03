@@ -151,9 +151,9 @@ venta_api, fecha_api_ar = traer_venta_dolarapi()
 usd_mayorista = None
 fuente_actual = None
 
-# Hora actual: con tz para mostrar y naive para guardar en DF
-ahora_ar = datetime.now(TZ_AR).replace(second=0, microsecond=0)   # para mostrar
-ahora_naive = ahora_ar.replace(tzinfo=None)                       # para DF (evitar mix aware/naive)
+# Hora actual: con tz para mostrar y naive para graficar (coordenada X)
+ahora_ar = datetime.now(TZ_AR).replace(second=0, microsecond=0)
+ahora_naive = ahora_ar.replace(tzinfo=None)
 
 if venta_api is not None:
     usd_mayorista = venta_api
@@ -166,53 +166,39 @@ else:
     else:
         fuente_actual = "Histórico (fallback)"
 
-# Fallback: si ambas fuentes fallan, usar último valor del histórico como punto “actual”
-# if usd_mayorista is None:
-#     if not historico.empty:
-#         ultimo_hist = float(historico.sort_values("fecha").iloc[-1]["precio"])
-#         st.info("No se pudo leer el spot en tiempo real (DolarAPI/proxy). Se usa el último valor del histórico.")
-#         fila_aprox = pd.DataFrame([{"fecha": ahora_naive, "precio": ultimo_hist}])
-#         historico = (
-#             pd.concat([historico, fila_aprox], ignore_index=True)
-#             .drop_duplicates(subset=["fecha"], keep="last")
-#             .sort_values("fecha")
-#             .reset_index(drop=True)
-#         )
-# else:
-#     # Si tenemos precio actual, anexamos el punto real en memoria (fecha naive)
-#     fila_actual = pd.DataFrame([{"fecha": ahora_naive, "precio": float(usd_mayorista)}])
-#     historico = (
-#         pd.concat([historico, fila_actual], ignore_index=True)
-#         .drop_duplicates(subset=["fecha"], keep="last")
-#         .sort_values("fecha")
-#         .reset_index(drop=True)
-#     )
-
 # -------------------------------
 # GRÁFICO (sin título)
 # -------------------------------
 fig = go.Figure()
 
-# Histórico
-if not historico.empty:
+# === Línea del USD Mayorista (histórico + último spot para conectar) ===
+df_linea = historico.copy()
+if (usd_mayorista is not None) and (not historico.empty):
+    df_linea = pd.concat(
+        [df_linea, pd.DataFrame([{"fecha": ahora_naive, "precio": float(usd_mayorista)}])],
+        ignore_index=True
+    ).sort_values("fecha")
+
+if not df_linea.empty:
     fig.add_trace(go.Scatter(
-        x=historico["fecha"],
-        y=historico["precio"],
+        x=df_linea["fecha"],
+        y=df_linea["precio"],
         mode="lines",
         name="USD Mayorista",
-        line=dict(color="black")
+        line=dict(color="black"),
+        connectgaps=True
     ))
 
-# Bandas
+# Bandas (Piso = rojo, Techo = verde para coincidir con la leyenda de tus capturas)
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["piso"],
     mode="lines", name="Piso Banda",
-    line=dict(color="green", dash="dash")
+    line=dict(color="red", dash="dash")
 ))
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["techo"],
     mode="lines", name="Techo Banda",
-    line=dict(color="red", dash="dash")
+    line=dict(color="green", dash="dash")
 ))
 fig.add_trace(go.Scatter(
     x=bandas["fecha"], y=bandas["promedio"],
@@ -220,31 +206,19 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual” (NO desde el df, solo desde API/proxy si hay)
-x_pt, y_pt = None, None
-
-if venta_api is not None:
-    x_pt = ahora_naive
-    y_pt = float(venta_api)
-else:
-    proxy_precio = traer_precio_api_via_proxy()
-    if proxy_precio is not None:
-        x_pt = ahora_naive
-        y_pt = float(proxy_precio)
-    # si tampoco hay proxy, NO dibujamos punto; solo la línea histórica
-
-if x_pt is not None and y_pt is not None:
+# Punto “actual” (solo desde API/proxy si hay)
+if usd_mayorista is not None:
     fig.add_trace(go.Scatter(
-        x=[x_pt], y=[y_pt],
+        x=[ahora_naive], y=[float(usd_mayorista)],
         mode="markers+text",
         name="USD Actual",
         marker=dict(size=8),
-        text=[f"${y_pt:,.0f}"],   # sin decimales
+        text=[f"${float(usd_mayorista):,.0f}"],
         textposition="top right"
     ))
 
 fig.update_layout(
-    title_text="",              # <= fuerza título vacío (evita 'undefined')
+    title_text="",
     xaxis_title="Fecha",
     yaxis_title="Precio",
     template="plotly_white",
@@ -252,22 +226,21 @@ fig.update_layout(
     paper_bgcolor="white",
     font=dict(color="black"),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    margin=dict(t=10)           # opcional: reduce el espacio superior
+    margin=dict(t=10)
 )
 
 # === Marca de inicio del régimen y sombreado hacia adelante ===
-# Tomo como inicio el primer día de las bandas (ajustalo si querés una fecha fija)
 inicio_regimen = pd.to_datetime(bandas["fecha"].min())
 
-# Límite derecho del sombreado = máx entre tu histórico y las bandas
+# incluir el spot en el límite derecho si existe
 x_max = pd.to_datetime(
     max(
         bandas["fecha"].max() if not bandas.empty else inicio_regimen,
         historico["fecha"].max() if not historico.empty else inicio_regimen,
+        pd.to_datetime(ahora_naive) if usd_mayorista is not None else inicio_regimen
     )
 )
 
-# Línea vertical del inicio
 fig.add_vline(
     x=inicio_regimen,
     line_width=1,
@@ -279,25 +252,23 @@ fig.add_vline(
 fig.add_annotation(
     x=inicio_regimen,
     yref="paper",
-    y=0.93,                 # antes: 1.02
+    y=0.93,
     xanchor="left",
     showarrow=False,
     text="Inicio régimen monetario de bandas cambiarias",
     font=dict(size=12, color="black")
 )
 
-# Sombreado tenue hacia la derecha del inicio
 fig.add_shape(
     type="rect",
     xref="x", yref="paper",
     x0=inicio_regimen, x1=x_max,
     y0=0, y1=1,
     fillcolor="lightgrey",
-    opacity=0.12,           # más/menos tenue
+    opacity=0.12,
     line_width=0,
-    layer="below"           # por debajo de las líneas
+    layer="below"
 )
-
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -313,10 +284,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Métrica rápida
-#st.subheader("")
-#col1, col2 = st.columns(2)
-#with col1:
-#    st.metric("USD Mayorista (venta)", f"${usd_mayorista:.2f}" if usd_mayorista is not None else "s/d")
-#with col2:
-#    st.caption("Visualización en AR; valores en $/USD.")
+# Métrica rápida (deshabilitada)
+# st.subheader("")
+# col1, col2 = st.columns(2)
+# with col1:
+#     st.metric("USD Mayorista (venta)", f\"${usd_mayorista:.2f}\" if usd_mayorista is not None else "s/d")
+# with col2:
+#     st.caption("Visualización en AR; valores en $/USD.")
