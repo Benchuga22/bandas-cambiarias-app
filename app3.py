@@ -77,19 +77,15 @@ def cargar_historico(path="data/mayorista.csv"):
     return df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
 
 
-def cargar_bandas_desde_csv(path="bandas.csv"):
-    """Carga bandas desde CSV y asegura columnas fecha, piso, techo, promedio."""
+def cargar_bandas(path="data/bandas.csv"):
+    """
+    Carga las bandas oficiales del BCRA (fecha, piso, techo) que mantiene actualizadas
+    el workflow .github/workflows/actualizar_datos.yml, y calcula el promedio.
+    """
     bandas = pd.read_csv(path)
-    bandas.columns = [c.strip().lower() for c in bandas.columns]
-
-    requeridas = {"fecha", "piso", "techo", "promedio"}
-    if not requeridas.issubset(set(bandas.columns)):
-        faltan = requeridas - set(bandas.columns)
-        raise ValueError(f"Columnas faltantes en bandas.csv: {', '.join(sorted(faltan))}")
-
-    bandas["fecha"] = pd.to_datetime(bandas["fecha"], format="%m/%d/%Y", errors="coerce")
-    bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
-    return bandas
+    bandas["fecha"] = pd.to_datetime(bandas["fecha"], format="%Y-%m-%d")
+    bandas["promedio"] = (bandas["piso"] + bandas["techo"]) / 2
+    return bandas.sort_values("fecha").reset_index(drop=True)
 
 
 # -------------------------------
@@ -100,7 +96,7 @@ st.title("Dólar Mayorista vs Bandas Cambiarias")
 
 # Cargar bandas
 try:
-    bandas = cargar_bandas_desde_csv("bandas.csv")
+    bandas = cargar_bandas()
 except Exception as e:
     st.error(f"No se pudieron cargar las bandas: {e}")
     st.stop()

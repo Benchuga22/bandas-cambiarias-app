@@ -1,6 +1,7 @@
-name: actualizar-mayorista
+name: actualizar-datos
 
-# Trae el histórico del dólar mayorista (UST$T) de MAE y actualiza data/mayorista.csv.
+# Trae el histórico del dólar mayorista (UST$T) de MAE -> data/mayorista.csv
+# y las bandas cambiarias oficiales del BCRA -> data/bandas.csv.
 # Corre de lunes a viernes después del cierre del mercado; también se puede
 # lanzar a mano desde la pestaña Actions ("Run workflow").
 on:
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       desde:
-        description: "Rehacer desde esta fecha (YYYY-MM-DD). Vacío = sólo los últimos días."
+        description: "Mayorista: rehacer desde esta fecha (YYYY-MM-DD). Vacío = sólo los últimos días."
         required: false
         default: ""
 
@@ -18,7 +19,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: actualizar-mayorista
+  group: actualizar-datos
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +35,9 @@ jobs:
       - name: Instalar dependencias
         run: pip install pandas requests tzdata
 
-      - name: Traer datos de MAE
+      - name: Traer dólar mayorista (MAE)
+        id: mae
+        continue-on-error: true
         run: |
           if [ -n "${{ inputs.desde }}" ]; then
             python scripts/actualizar_mayorista.py --desde "${{ inputs.desde }}"
@@ -42,14 +45,25 @@ jobs:
             python scripts/actualizar_mayorista.py
           fi
 
+      - name: Traer bandas (BCRA)
+        id: bcra
+        continue-on-error: true
+        run: python scripts/actualizar_bandas.py
+
       - name: Commitear si hay cambios
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/mayorista.csv
+          git add -A data/
           if git diff --cached --quiet; then
             echo "Sin cambios"
           else
-            git commit -m "data: actualizar dólar mayorista $(date -u +%Y-%m-%d)"
+            git commit -m "data: actualizar mayorista y bandas $(date -u +%Y-%m-%d)"
             git push
           fi
+
+      - name: Marcar error si alguna fuente falló
+        if: steps.mae.outcome == 'failure' || steps.bcra.outcome == 'failure'
+        run: |
+          echo "MAE: ${{ steps.mae.outcome }} / BCRA: ${{ steps.bcra.outcome }}"
+          exit 1
