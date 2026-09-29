@@ -4,8 +4,6 @@ name: actualizar-mayorista
 # Corre de lunes a viernes después del cierre del mercado; también se puede
 # lanzar a mano desde la pestaña Actions ("Run workflow").
 on:
-  push:
-    branches: [automatizar-mayorista]   # TEMPORAL para probar
   schedule:
     - cron: "47 19 * * 1-5"   # 16:47 hora Argentina
     - cron: "47 23 * * 1-5"   # 20:47 hora Argentina (reintento por si el primero falló)
