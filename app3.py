@@ -1,6 +1,5 @@
 import os
 import json
-from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -66,47 +65,16 @@ def traer_precio_api_via_proxy():
         return None
 
 
-def cargar_historico_desde_xlsx(carpeta="."):
+def cargar_historico(path="data/mayorista.csv"):
     """
-    Carga histórico desde el primer .xlsx/.xls en 'carpeta'.
-    Espera columnas: Fecha, Precio (no todas se usan).
+    Carga el histórico del mayorista (UST$T MAE) que mantiene actualizado
+    el workflow .github/workflows/actualizar_mayorista.yml.
     Devuelve DataFrame con ['fecha','precio'] filtrado a año >= 2025.
     """
-    xls = [p for p in Path(carpeta).glob("*.xls*") if not p.name.startswith("~$")]
-    if not xls:
-        raise FileNotFoundError("No se encontró ningún archivo .xlsx en la carpeta actual.")
-    if len(xls) > 1:
-        st.warning(f"Se encontraron varios Excel, se usará: {xls[0].name}")
-
-    df = pd.read_excel(xls[0], engine="openpyxl")
-
-    # Normalizar columnas
-    df.columns = [c.strip().lower() for c in df.columns]
-    ren = {}
-    if "fecha" not in df.columns:
-        for c in df.columns:
-            if c.lower().startswith("fecha"):
-                ren[c] = "fecha"
-    if "precio" not in df.columns:
-        for c in df.columns:
-            if c.lower().startswith("precio"):
-                ren[c] = "precio"
-    if ren:
-        df = df.rename(columns=ren)
-
-    if "fecha" not in df.columns or "precio" not in df.columns:
-        raise ValueError("El Excel debe contener columnas 'Fecha' y 'Precio'.")
-
-    # Parseo fechas con tolerancia (naive)
-    df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True, errors="coerce")
-    df = df.dropna(subset=["fecha"])
-
-    # Filtro a 2025+
+    df = pd.read_csv(path)
+    df["fecha"] = pd.to_datetime(df["fecha"], format="%Y-%m-%d")
     df = df[df["fecha"].dt.year >= 2025]
-
-    # Sólo lo necesario
-    df = df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
-    return df
+    return df[["fecha", "precio"]].sort_values("fecha").reset_index(drop=True)
 
 
 def cargar_bandas_desde_csv(path="bandas.csv"):
@@ -119,7 +87,7 @@ def cargar_bandas_desde_csv(path="bandas.csv"):
         faltan = requeridas - set(bandas.columns)
         raise ValueError(f"Columnas faltantes en bandas.csv: {', '.join(sorted(faltan))}")
 
-    bandas["fecha"] = pd.to_datetime(bandas["fecha"], dayfirst=True, errors="coerce")
+    bandas["fecha"] = pd.to_datetime(bandas["fecha"], format="%m/%d/%Y", errors="coerce")
     bandas = bandas.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
     return bandas
 
@@ -137,11 +105,11 @@ except Exception as e:
     st.error(f"No se pudieron cargar las bandas: {e}")
     st.stop()
 
-# Cargar histórico desde el único Excel
+# Cargar histórico del mayorista
 try:
-    historico = cargar_historico_desde_xlsx(".")
+    historico = cargar_historico()
 except Exception as e:
-    st.error(f"No se pudo cargar el histórico desde Excel: {e}")
+    st.error(f"No se pudo cargar el histórico del mayorista: {e}")
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
 # 1) Intento con DolarAPI (venta)
@@ -270,7 +238,7 @@ fig.add_shape(
     layer="below"
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Caption con hora local AR y fuente
 subtitulo_fuente = f"Fuente: {fuente_actual} • Última actualización (AR): {ahora_ar.strftime('%Y-%m-%d %H:%M:%S')}"
