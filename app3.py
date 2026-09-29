@@ -1,4 +1,3 @@
-import os
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -11,7 +10,6 @@ import plotly.graph_objects as go
 # -------------------------------
 # CONFIG
 # -------------------------------
-PROXY_URL = st.secrets.get("PROXY_URL", os.getenv("PROXY_URL"))
 DOLARAPI_URL = "https://dolarapi.com/v1/dolares/mayorista"
 TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
 HEADERS = {
@@ -45,30 +43,10 @@ def traer_venta_dolarapi():
         return None, None
 
 
-@st.cache_data(ttl=300)
-def traer_precio_api_via_proxy():
-    """
-    Llama al proxy (FastAPI) que consulta el MAE y devuelve {precio: ...}.
-    Devuelve None si falla o no está configurado.
-    """
-    if not PROXY_URL:
-        return None
-    try:
-        r = requests.get(f"{PROXY_URL.rstrip('/')}/mae/latest", timeout=10)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if isinstance(data, str):
-            data = json.loads(data)
-        return data.get("precio")
-    except Exception:
-        return None
-
-
 def cargar_historico(path="data/mayorista.csv"):
     """
     Carga el histórico del mayorista (UST$T MAE) que mantiene actualizado
-    el workflow .github/workflows/actualizar_mayorista.yml.
+    el workflow .github/workflows/actualizar_datos.yml.
     Devuelve DataFrame con ['fecha','precio'] filtrado a año >= 2025.
     """
     df = pd.read_csv(path)
@@ -108,10 +86,9 @@ except Exception as e:
     st.error(f"No se pudo cargar el histórico del mayorista: {e}")
     historico = pd.DataFrame(columns=["fecha", "precio"])
 
-# 1) Intento con DolarAPI (venta)
+# Valor actual desde DolarAPI (si falla, se muestra sólo el histórico)
 venta_api, fecha_api_ar = traer_venta_dolarapi()
 
-# 2) Si DolarAPI falla, intento proxy
 usd_mayorista = None
 fuente_actual = None
 
@@ -123,12 +100,7 @@ if venta_api is not None:
     usd_mayorista = venta_api
     fuente_actual = f"DolarAPI (actualizado: {fecha_api_ar.strftime('%Y-%m-%d %H:%M:%S %Z') if isinstance(fecha_api_ar, datetime) else 's/d'})"
 else:
-    proxy_precio = traer_precio_api_via_proxy()
-    if proxy_precio is not None:
-        usd_mayorista = float(proxy_precio)
-        fuente_actual = "Proxy MAE"
-    else:
-        fuente_actual = "Histórico (fallback)"
+    fuente_actual = "Histórico (fallback)"
 
 # -------------------------------
 # GRÁFICO (sin título)
@@ -170,7 +142,7 @@ fig.add_trace(go.Scatter(
     line=dict(color="blue", dash="dot")
 ))
 
-# Punto “actual” (solo desde API/proxy si hay)
+# Punto “actual” (sólo si DolarAPI respondió)
 if usd_mayorista is not None:
     fig.add_trace(go.Scatter(
         x=[ahora_naive], y=[float(usd_mayorista)],
@@ -247,11 +219,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
-
-# Métrica rápida (deshabilitada)
-# st.subheader("")
-# col1, col2 = st.columns(2)
-# with col1:
-#     st.metric("USD Mayorista (venta)", f\"${usd_mayorista:.2f}\" if usd_mayorista is not None else "s/d")
-# with col2:
-#     st.caption("Visualización en AR; valores en $/USD.")
